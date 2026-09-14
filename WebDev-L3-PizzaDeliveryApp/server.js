@@ -1,71 +1,102 @@
 const express = require('express');
 const cors = require('cors');
+require('dotenv').config();
 
+// Import database connection
+const connectDB = require('./config/database');
+
+// Import routes
+const orderRoutes = require('./routes/orderRoutes');
+const inventoryRoutes = require('./routes/inventoryRoutes');
+const authRoutes = require('./routes/authRoutes');
+const adminRoutes = require('./routes/adminRoutes');
+
+// Import middleware
+const errorHandler = require('./middleware/errorHandler');
+
+// Initialize Express app
 const app = express();
+
+// Middleware
 app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 app.use(cors());
 
-// Mock Data Store for Local Testing
-let mockInventory = [
-    { id: '1', item: 'Thin Crust', category: 'Base', stock: 50 },
-    { id: '2', item: 'Cheese Burst', category: 'Base', stock: 15 },
-    { id: '3', item: 'Marinara', category: 'Sauce', stock: 40 },
-    { id: '4', item: 'Mozzarella', category: 'Cheese', stock: 35 },
-    { id: '5', item: 'Jalapenos', category: 'Veggies', stock: 25 }
-];
+// Request logging middleware (Development)
+if (process.env.NODE_ENV !== 'production') {
+    app.use((req, res, next) => {
+        console.log(`[${new Date().toISOString()}] ${req.method} ${req.url}`);
+        next();
+    });
+}
 
-let mockOrders = [];
+// Connect to MongoDB
+connectDB();
 
-// Health-check endpoint
+// Health check endpoint
 app.get('/api/health', (req, res) => {
-    res.json({ status: 'OK', message: 'Pizza Delivery API is active', timestamp: new Date() });
-});
-
-// Fetch Inventory endpoint
-app.get('/api/inventory', (req, res) => {
-    res.json(mockInventory);
-});
-
-// Place Order endpoint
-app.post('/api/orders', (req, res) => {
-    const { base, sauce, cheese, veggies, amount } = req.body;
-    
-    const newOrder = {
-        id: Date.now().toString(),
-        userId: 'guest_user',
-        base: base || 'Thin Crust',
-        sauce: sauce || 'Marinara',
-        cheese: cheese || 'Mozzarella',
-        veggies: veggies || [],
-        amount: amount || 12.99,
-        status: 'Order Received',
-        createdAt: new Date()
-    };
-
-    mockOrders.push(newOrder);
-
-    // Auto-decrement inventory stock
-    mockInventory = mockInventory.map(item => {
-        if ([base, sauce, cheese].includes(item.item) || (veggies && veggies.includes(item.item))) {
-            return { ...item, stock: Math.max(0, item.stock - 1) };
-        }
-        return item;
-    });
-
-    res.status(201).json({
+    res.json({ 
         success: true,
-        message: 'Order placed successfully!',
-        order: newOrder
+        status: 'OK', 
+        message: 'Pizza Delivery API is active', 
+        timestamp: new Date(),
+        environment: process.env.NODE_ENV || 'development'
     });
 });
 
-// Fetch Orders endpoint
-app.get('/api/orders', (req, res) => {
-    res.json(mockOrders);
+// API Routes
+app.use('/api/orders', orderRoutes);
+app.use('/api/inventory', inventoryRoutes);
+app.use('/api/auth', authRoutes);
+app.use('/api/admin', adminRoutes);
+
+// Root endpoint
+app.get('/', (req, res) => {
+    res.json({
+        success: true,
+        message: 'Welcome to Pizza Delivery API',
+        version: '1.0.0',
+        endpoints: {
+            health: '/api/health',
+            orders: '/api/orders',
+            inventory: '/api/inventory'
+        }
+    });
 });
 
-// Start Server on 127.0.0.1 for explicit Node v24 binding
-const PORT = 5000;
-app.listen(PORT, '127.0.0.1', () => {
-    console.log(`[SUCCESS] Backend Server running on http://127.0.0.1:${PORT}`);
+// 404 handler
+app.use((req, res) => {
+    res.status(404).json({
+        success: false,
+        message: 'Route not found'
+    });
 });
+
+// Error handling middleware (must be last)
+app.use(errorHandler);
+
+// Start server
+const PORT = process.env.PORT || 5001;
+const server = app.listen(PORT, '127.0.0.1', () => {
+    console.log('='.repeat(50));
+    console.log(`[SUCCESS] Server running on http://127.0.0.1:${PORT}`);
+    console.log(`[INFO] Environment: ${process.env.NODE_ENV || 'development'}`);
+    console.log('='.repeat(50));
+});
+
+// Handle unhandled promise rejections
+process.on('unhandledRejection', (err) => {
+    console.error('[CRITICAL] Unhandled Promise Rejection:', err);
+    // Close server & exit process
+    server.close(() => process.exit(1));
+});
+
+// Handle SIGTERM
+process.on('SIGTERM', () => {
+    console.log('[INFO] SIGTERM received. Shutting down gracefully...');
+    server.close(() => {
+        console.log('[INFO] Process terminated');
+    });
+});
+
+module.exports = app;
