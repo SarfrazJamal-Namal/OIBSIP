@@ -6,9 +6,11 @@ export const API_ENDPOINTS = {
     HEALTH: `${API_BASE_URL}/api/health`,
     
     // Auth
-    AUTH_REGISTER: `${API_BASE_URL}/api/auth/register`,
+    AUTH_SEND_OTP: `${API_BASE_URL}/api/auth/send-otp`,       // New: Step 1 - Send OTP
+    AUTH_VERIFY_OTP: `${API_BASE_URL}/api/auth/verify-otp`,   // New: Step 2 - Verify OTP
+    AUTH_REGISTER: `${API_BASE_URL}/api/auth/register`,        // Legacy (redirects to send-otp)
     AUTH_LOGIN: `${API_BASE_URL}/api/auth/login`,
-    AUTH_VERIFY_CODE: `${API_BASE_URL}/api/auth/verify-code`,
+    AUTH_VERIFY_CODE: `${API_BASE_URL}/api/auth/verify-code`, // Legacy (redirects to verify-otp)
     
     // Orders
     ORDERS: `${API_BASE_URL}/api/orders`,

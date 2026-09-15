@@ -10,8 +10,9 @@ A professional MERN stack pizza delivery platform featuring real-time order mana
 ## 🚀 Features
 
 ### **User Features:**
-- ✅ User registration with **6-digit email verification**
-- ✅ Secure JWT-based authentication
+- ✅ **Secure registration with pre-verification** - No database writes until email is verified
+- ✅ **6-digit OTP email verification** with in-memory storage
+- ✅ Secure JWT-based authentication with bcrypt password hashing
 - ✅ Interactive 4-step pizza customization
 - ✅ Real-time inventory availability check
 - ✅ Razorpay payment integration (test mode)
@@ -161,9 +162,20 @@ npm run dev
 1. Open: http://localhost:5173
 2. Click **"Register here"**
 3. Enter email and password
-4. ✅ **Check email inbox** (or spam folder) for 6-digit code
-5. Enter code in verification modal
-6. Login successful!
+4. ✅ **If email is valid:** Browser alert confirms "See your verification 6-digit code sent to your email"
+5. ✅ **Check email inbox** (or spam folder) for 6-digit OTP
+6. Enter OTP in verification modal
+7. **User account created in database** after successful verification
+8. Automatic login!
+
+**Security Note:** If an invalid/non-existent email is entered, you'll see an error alert and NO verification modal will open. The registration form stays active to try again with a valid email.
+
+### **Failed Email Scenarios:**
+
+- ❌ **Invalid email address:** Alert shows "Failed to send verification email. Please check your email address and try again."
+- ❌ **Non-existent email:** Same error message
+- ❌ **No database entry:** User data is NEVER saved until OTP is verified
+- ❌ **No admin notifications:** System does NOT send error emails to administrators
 
 ### **Admin Login:**
 
@@ -262,9 +274,11 @@ git push origin main --force
 ## 🌐 API Endpoints
 
 ### **Authentication:**
-- `POST /api/auth/register` - User registration
+- `POST /api/auth/send-otp` - Send OTP for registration (validates email first)
+- `POST /api/auth/verify-otp` - Verify OTP and create user account
 - `POST /api/auth/login` - User login
-- `POST /api/auth/verify-code` - Email verification
+- `POST /api/auth/register` - Legacy endpoint (redirects to send-otp)
+- `POST /api/auth/verify-code` - Legacy endpoint (redirects to verify-otp)
 
 ### **Orders:**
 - `GET /api/orders` - Get all orders
@@ -278,9 +292,20 @@ git push origin main --force
 
 ---
 
-## 📧 Email Verification
+## 📧 Email Verification & Security
 
-Users receive a **6-digit verification code** via email upon registration.
+Users receive a **6-digit OTP** via email upon registration.
+
+**Pre-Verification Security Features:**
+- ✅ **No database writes** until OTP is successfully verified
+- ✅ **Email deliverability check** using nodemailer SMTP validation
+- ✅ **In-memory OTP storage** with 10-minute auto-expiration
+- ✅ **Bcrypt password hashing** (salt rounds: 10)
+- ✅ **No admin error emails** - failed registrations fail silently for the user
+
+**Dual-Alert System:**
+- ✅ **Success:** Browser alert + OTP verification modal opens
+- ❌ **Failure:** Browser alert only (modal does NOT open, user stays on registration page)
 
 **Note:** Emails may land in **spam folder** initially. Mark as "Not Spam" for future emails to reach inbox.
 

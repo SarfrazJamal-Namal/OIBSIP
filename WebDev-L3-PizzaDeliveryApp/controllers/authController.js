@@ -1,131 +1,191 @@
 const User = require('../models/User');
 const jwt = require('jsonwebtoken');
-const { sendVerificationCode } = require('../utils/emailService');
+const bcrypt = require('bcrypt');
+const { sendVerificationCode, verifyEmailDeliverability } = require('../utils/emailService');
 
-// Simple password hashing (in production use bcrypt)
-const hashPassword = (password) => {
-    return Buffer.from(password).toString('base64');
+// In-memory storage for pending registrations (OTP + user data)
+// Structure: { email: { name, password (hashed), role, otp, expiresAt } }
+const pendingRegistrations = new Map();
+
+// Cleanup expired entries every minute
+setInterval(() => {
+    const now = Date.now();
+    for (const [email, data] of pendingRegistrations.entries()) {
+        if (now > data.expiresAt) {
+            pendingRegistrations.delete(email);
+            console.log(`[CLEANUP] Expired OTP for: ${email}`);
+        }
+    }
+}, 60000);
+
+// Password hashing with bcrypt
+const hashPassword = async (password) => {
+    const salt = await bcrypt.genSalt(10);
+    return await bcrypt.hash(password, salt);
 };
 
-const comparePassword = (password, hashedPassword) => {
-    return hashPassword(password) === hashedPassword;
+const comparePassword = async (password, hashedPassword) => {
+    return await bcrypt.compare(password, hashedPassword);
 };
 
-// @desc    Register new user
-// @route   POST /api/auth/register
+// @desc    Send OTP (STEP 1: Validate email deliverability and send verification code)
+// @route   POST /api/auth/send-otp
 // @access  Public
-exports.register = async (req, res) => {
+exports.sendOTP = async (req, res) => {
     try {
-        const { email, password, role } = req.body;
+        const { email, password, name, role } = req.body;
 
-        // Check if user exists
-        const existingUser = await User.findOne({ email });
-        if (existingUser) {
+        // Validate required fields
+        if (!email || !password) {
             return res.status(400).json({
                 success: false,
-                message: 'User already exists'
+                message: 'Email and password are required',
+                needsVerification: false
             });
         }
 
-        // Create user (NOT verified yet)
-        const user = await User.create({
-            email,
-            password: hashPassword(password),
-            role: role || 'user',
-            isVerified: false
-        });
+        // Normalize email
+        const normalizedEmail = email.trim().toLowerCase();
 
-        // Generate 6-digit verification code
-        const verificationCode = user.generateVerificationCode();
-        await user.save();
-
-        // Send verification code via email
-        const emailResult = await sendVerificationCode(email, verificationCode);
-        
-        if (!emailResult.success) {
-            console.error('[EMAIL] Failed to send verification code:', emailResult.error);
+        // Check if user already exists in main database
+        const existingUser = await User.findOne({ email: normalizedEmail });
+        if (existingUser) {
+            return res.status(400).json({
+                success: false,
+                message: 'User already exists with this email address',
+                needsVerification: false
+            });
         }
 
-        // DO NOT return JWT token yet - user must verify first
-        res.status(201).json({
+        // Generate 6-digit verification code
+        const otp = Math.floor(100000 + Math.random() * 900000).toString();
+        
+        console.log('[SEND-OTP] Attempting to send verification code to:', normalizedEmail);
+
+        // Send verification code via email FIRST (this validates email exists)
+        const emailResult = await sendVerificationCode(normalizedEmail, otp);
+        
+        if (!emailResult.success) {
+            // Email sending failed - email doesn't exist or is invalid
+            console.error('[EMAIL] Failed to send verification code:', emailResult.error);
+            
+            // DO NOT SAVE ANYTHING TO DATABASE OR MEMORY
+            // DO NOT SEND ADMIN EMAIL
+            return res.status(400).json({
+                success: false,
+                message: 'Failed to send verification email. Please check your email address and try again.',
+                needsVerification: false
+            });
+        }
+
+        // Email sent successfully! NOW store in memory temporarily (NO DATABASE SAVE)
+        const hashedPassword = await hashPassword(password);
+        
+        pendingRegistrations.set(normalizedEmail, {
+            name: name || 'Guest User',
+            password: hashedPassword,
+            role: role || 'user',
+            otp: otp,
+            expiresAt: Date.now() + (10 * 60 * 1000) // 10 minutes from now
+        });
+
+        console.log('[SUCCESS] Verification code sent and stored in memory:', normalizedEmail);
+
+        // Email sent successfully - user can proceed to verification
+        res.status(200).json({
             success: true,
-            message: 'Registration successful! Please check your email for verification code.',
-            email: user.email,
+            message: 'Verification code sent to your email!',
+            email: normalizedEmail,
             needsVerification: true
         });
     } catch (error) {
-        console.error('[ERROR] Register:', error);
+        console.error('[ERROR] Send OTP:', error);
         res.status(500).json({
             success: false,
-            message: 'Registration failed',
-            error: error.message
+            message: 'Failed to send verification code',
+            needsVerification: false
         });
     }
 };
 
-// @desc    Verify email with code
-// @route   POST /api/auth/verify-code
+// @desc    Verify OTP and CREATE user (STEP 2: Verify and save to database)
+// @route   POST /api/auth/verify-otp
 // @access  Public
-exports.verifyCode = async (req, res) => {
+exports.verifyOTP = async (req, res) => {
     try {
-        const { email, code } = req.body;
+        const { email, otp } = req.body;
 
-        // Find user
-        const user = await User.findOne({ email });
+        // Validate required fields
+        if (!email || !otp) {
+            return res.status(400).json({
+                success: false,
+                message: 'Email and verification code are required'
+            });
+        }
+
+        // Normalize email
+        const normalizedEmail = email.trim().toLowerCase();
+
+        // Find pending registration in memory
+        const pendingData = pendingRegistrations.get(normalizedEmail);
         
-        if (!user) {
+        if (!pendingData) {
             return res.status(404).json({
                 success: false,
-                message: 'User not found'
+                message: 'No pending registration found. Please register again.'
             });
         }
 
-        // Check if already verified
-        if (user.isVerified) {
+        // Check if OTP expired
+        if (Date.now() > pendingData.expiresAt) {
+            pendingRegistrations.delete(normalizedEmail);
             return res.status(400).json({
                 success: false,
-                message: 'Email already verified'
+                message: 'Verification code has expired. Please register again.'
             });
         }
 
-        // Check if code matches
-        if (user.verificationCode !== code) {
+        // Check if OTP matches
+        if (pendingData.otp !== otp.toString()) {
             return res.status(400).json({
                 success: false,
-                message: 'Invalid verification code'
+                message: 'Invalid verification code. Please try again.'
             });
         }
 
-        // Check if code expired
-        if (new Date() > user.verificationCodeExpires) {
-            return res.status(400).json({
-                success: false,
-                message: 'Verification code has expired. Please request a new one.'
-            });
-        }
+        // OTP is valid! NOW create user in main database
+        const isAdminEmail = normalizedEmail === 'sarfrazjamal56@gmail.com';
+        
+        const newUser = await User.create({
+            email: normalizedEmail,
+            password: pendingData.password, // Already hashed
+            role: isAdminEmail ? 'admin' : pendingData.role,
+            name: isAdminEmail ? 'Sarfraz Jamal' : pendingData.name,
+            isVerified: true // Already verified via OTP
+        });
 
-        // Mark user as verified
-        user.isVerified = true;
-        user.verificationCode = null;
-        user.verificationCodeExpires = null;
-        await user.save();
+        // Delete from memory
+        pendingRegistrations.delete(normalizedEmail);
 
-        // Generate JWT token NOW
+        // Generate JWT token for auto-login
         const token = jwt.sign(
-            { id: user._id, email: user.email, role: user.role },
+            { id: newUser._id, email: newUser.email, role: newUser.role },
             process.env.JWT_SECRET,
             { expiresIn: '7d' }
         );
+
+        console.log(`[SUCCESS] User verified and created: ${normalizedEmail}`);
 
         res.status(200).json({
             success: true,
             message: 'Email verified successfully!',
             token,
-            role: user.role,
-            email: user.email
+            role: newUser.role,
+            email: newUser.email,
+            name: newUser.name
         });
     } catch (error) {
-        console.error('[ERROR] Verify Code:', error);
+        console.error('[ERROR] Verify OTP:', error);
         res.status(500).json({
             success: false,
             message: 'Verification failed',
@@ -141,8 +201,11 @@ exports.login = async (req, res) => {
     try {
         const { email, password } = req.body;
 
+        // Normalize email
+        const normalizedEmail = email.trim().toLowerCase();
+
         // Find user
-        const user = await User.findOne({ email });
+        const user = await User.findOne({ email: normalizedEmail });
         if (!user) {
             return res.status(401).json({
                 success: false,
@@ -150,8 +213,9 @@ exports.login = async (req, res) => {
             });
         }
 
-        // Check password
-        if (!comparePassword(password, user.password)) {
+        // Check password (now using bcrypt)
+        const isMatch = await comparePassword(password, user.password);
+        if (!isMatch) {
             return res.status(401).json({
                 success: false,
                 message: 'Invalid email or password'
@@ -179,6 +243,7 @@ exports.login = async (req, res) => {
             token,
             role: user.role,
             email: user.email,
+            name: user.name,
             isVerified: user.isVerified
         });
     } catch (error) {

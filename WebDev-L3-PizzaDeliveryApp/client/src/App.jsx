@@ -24,6 +24,8 @@ function App() {
   const [showVerificationModal, setShowVerificationModal] = useState(false);
   const [verificationCode, setVerificationCode] = useState('');
   const [pendingEmail, setPendingEmail] = useState('');
+  const [pendingName, setPendingName] = useState('');
+  const [pendingPassword, setPendingPassword] = useState('');
 
   // Show verification page if needed
   if (isVerifyPage) {
@@ -59,41 +61,53 @@ function App() {
     setLoading(true);
     
     try {
-      // Auto-detect admin email
       const isAdminEmail = userEmail.trim().toLowerCase() === 'sarfrazjamal56@gmail.com';
       const requestRole = isAdminEmail ? 'admin' : (isAdminLogin ? 'admin' : 'user');
       
-      const endpoint = isRegister ? API_ENDPOINTS.AUTH_REGISTER : API_ENDPOINTS.AUTH_LOGIN;
-      
-      const res = await fetch(endpoint, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          email: userEmail.trim(), 
-          password,
-          role: requestRole
-        })
-      });
-      
-      const data = await res.json();
-      
-      if (data.success) {
-        // Check if verification needed (registration)
-        if (data.needsVerification) {
+      if (isRegister) {
+        const res = await fetch(API_ENDPOINTS.AUTH_SEND_OTP, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ 
+            email: userEmail.trim(), 
+            password,
+            name: userEmail.split('@')[0],
+            role: requestRole
+          })
+        });
+        
+        const data = await res.json();
+        
+        if (data.success && data.needsVerification) {
+          alert('See your verification 6-digit code sent to your email.');
           setPendingEmail(userEmail.trim());
+          setPendingName(userEmail.split('@')[0]);
+          setPendingPassword(password);
           setShowVerificationModal(true);
           setUserEmail('');
           setPassword('');
-          alert('✅ Registration successful!\n\n📧 Please check your email inbox (or spam/junk folder) for a 6-digit verification code.\n\n⏰ Code expires in 10 minutes.');
         } else {
-          // Login successful
+          alert(data.message || 'Failed to send verification email. Please check your email address and try again.');
+        }
+      } else {
+        const res = await fetch(API_ENDPOINTS.AUTH_LOGIN, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ 
+            email: userEmail.trim(), 
+            password,
+            role: requestRole
+          })
+        });
+        
+        const data = await res.json();
+        
+        if (data.success) {
           const finalRole = isAdminEmail ? 'admin' : data.role;
-          
           setToken(data.token);
           setRole(finalRole);
           
-          // Set user name
-          let name = data.email.split('@')[0];
+          let name = data.name || data.email.split('@')[0];
           if (isAdminEmail) {
             name = 'Sarfraz Jamal';
           }
@@ -104,16 +118,15 @@ function App() {
           localStorage.setItem('email', data.email);
           localStorage.setItem('userName', name);
           
-          // Clear form
           setUserEmail('');
           setPassword('');
+        } else {
+          alert(data.message || 'Invalid email or password');
         }
-      } else {
-        alert(data.message || 'Authentication failed');
       }
     } catch (err) {
       console.error('Auth Error:', err);
-      alert('Authentication Error');
+      alert('Authentication Error. Please try again.');
     } finally {
       setLoading(false);
     }
@@ -124,12 +137,12 @@ function App() {
     setLoading(true);
     
     try {
-      const res = await fetch(API_ENDPOINTS.AUTH_VERIFY_CODE, {
+      const res = await fetch(API_ENDPOINTS.AUTH_VERIFY_OTP, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
           email: pendingEmail, 
-          code: verificationCode 
+          otp: verificationCode 
         })
       });
       
@@ -143,7 +156,7 @@ function App() {
         setToken(data.token);
         setRole(finalRole);
         
-        let name = data.email.split('@')[0];
+        let name = data.name || data.email.split('@')[0];
         if (isAdminEmail) {
           name = 'Sarfraz Jamal';
         }
@@ -158,6 +171,8 @@ function App() {
         setShowVerificationModal(false);
         setVerificationCode('');
         setPendingEmail('');
+        setPendingName('');
+        setPendingPassword('');
         
         alert('Email verified successfully! Welcome to Pizza Platform! 🍕');
       } else {
@@ -165,7 +180,7 @@ function App() {
       }
     } catch (err) {
       console.error('Verify Error:', err);
-      alert('Verification Error');
+      alert('Verification Error. Please try again.');
     } finally {
       setLoading(false);
     }
@@ -447,6 +462,8 @@ function App() {
                   setShowVerificationModal(false);
                   setVerificationCode('');
                   setPendingEmail('');
+                  setPendingName('');
+                  setPendingPassword('');
                 }}
                 style={{
                   width: '100%',

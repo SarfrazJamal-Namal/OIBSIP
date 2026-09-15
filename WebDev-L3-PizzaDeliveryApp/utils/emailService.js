@@ -1,12 +1,24 @@
 const nodemailer = require('nodemailer');
 require('dotenv').config();
 
-// Create transporter
+// Create transporter with connection pool
 const transporter = nodemailer.createTransport({
   service: 'gmail',
   auth: {
     user: process.env.EMAIL_USER,
     pass: process.env.EMAIL_PASSWORD
+  },
+  pool: true,
+  maxConnections: 5,
+  maxMessages: 10
+});
+
+// Verify transporter configuration on startup
+transporter.verify((error, success) => {
+  if (error) {
+    console.error('[EMAIL] Transporter configuration error:', error);
+  } else {
+    console.log('[EMAIL] Email service ready');
   }
 });
 
@@ -53,12 +65,59 @@ const sendVerificationCode = async (email, verificationCode) => {
   };
 
   try {
-    const info = await transporter.sendMail(mailOptions);
+    // Set timeout for email sending (5 seconds)
+    const sendPromise = transporter.sendMail(mailOptions);
+    const timeoutPromise = new Promise((_, reject) => 
+      setTimeout(() => reject(new Error('Email send timeout')), 5000)
+    );
+
+    const info = await Promise.race([sendPromise, timeoutPromise]);
+    
     console.log('[EMAIL] Verification code sent:', info.messageId);
+    console.log('[EMAIL] Accepted recipients:', info.accepted);
+    console.log('[EMAIL] Rejected recipients:', info.rejected);
+    
+    // Check if email was rejected (email doesn't exist)
+    if (info.rejected && info.rejected.length > 0) {
+      console.error('[EMAIL] Email address rejected by server:', info.rejected);
+      return { 
+        success: false, 
+        error: `Email address does not exist or is invalid: ${info.rejected.join(', ')}` 
+      };
+    }
+    
+    // Check if no emails were accepted (another form of rejection)
+    if (!info.accepted || info.accepted.length === 0) {
+      console.error('[EMAIL] No recipients accepted the email');
+      return { 
+        success: false, 
+        error: 'Email address does not exist or is invalid' 
+      };
+    }
+    
     return { success: true, messageId: info.messageId };
   } catch (error) {
-    console.error('[EMAIL ERROR]:', error);
-    return { success: false, error: error.message };
+    console.error('[EMAIL ERROR] Exception during send:', error.message);
+    
+    // Parse specific error messages
+    if (error.message.includes('No recipients defined') || 
+        error.message.includes('Invalid email') ||
+        error.message.includes('invalid') ||
+        error.message.includes('Recipient address rejected') ||
+        error.message.includes('User unknown') ||
+        error.message.includes('Mailbox') ||
+        error.message.includes('timeout')) {
+      return { 
+        success: false, 
+        error: 'Email address does not exist or is invalid' 
+      };
+    }
+    
+    // Generic error (network issues, etc.)
+    return { 
+      success: false, 
+      error: 'Failed to send email. Please try again.' 
+    };
   }
 };
 

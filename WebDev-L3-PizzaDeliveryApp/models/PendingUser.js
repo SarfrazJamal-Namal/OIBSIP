@@ -1,6 +1,7 @@
 const mongoose = require('mongoose');
 
-const userSchema = new mongoose.Schema({
+// Temporary storage for unverified users
+const pendingUserSchema = new mongoose.Schema({
     email: {
         type: String,
         required: true,
@@ -17,16 +18,18 @@ const userSchema = new mongoose.Schema({
         enum: ['user', 'admin'],
         default: 'user'
     },
-    name: {
+    verificationCode: {
         type: String,
-        default: 'Guest User'
+        required: true
     },
-    isVerified: {
-        type: Boolean,
-        default: false
+    expiresAt: {
+        type: Date,
+        required: true,
+        default: () => new Date(Date.now() + 10 * 60 * 1000), // 10 minutes
+        index: { expires: 0 } // Auto-delete after expiration
     }
 }, {
     timestamps: true
 });
 
-module.exports = mongoose.model('User', userSchema);
+module.exports = mongoose.model('PendingUser', pendingUserSchema);
